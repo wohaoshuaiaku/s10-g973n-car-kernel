@@ -1,0 +1,61 @@
+name: G973N kernel candidate - review required
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - prepare_source.py
+      - .github/workflows/build.yml
+permissions:
+  contents: read
+jobs:
+  kernel:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev libtinfo5 ccache xz-utils python3
+      - name: Pinned upstream source
+        run: |
+          git init kernel
+          git -C kernel remote add origin https://github.com/CruelKernel/samsung-exynos9820.git
+          git -C kernel fetch --depth 1 origin 41aba77656e3377e8c55691b8b807d915e545343
+          git -C kernel checkout --detach FETCH_HEAD
+          git clone --depth 1 --branch cruel https://github.com/CruelKernel/samsung-exynos9820-toolchain.git kernel/toolchain
+          test "$(git -C kernel/toolchain rev-parse HEAD)" = 3ac74dac868fb71ad2582b3be9805f36e7033ce7
+      - name: Prepare exact model and Magisk
+        run: python3 prepare_source.py kernel Magisk-v31.1.apk
+      - name: Compile candidate only
+        env:
+          NODEFAULTS: y
+        run: |
+          set -euo pipefail
+          cd kernel
+          ./cruelbuild config model=G973N name=Car-G973N-candidate toolchain=cruel os_patch_level=2023-04 +samsung +nodebug +nohardening +magisk=v31.1 2>&1 | tee ../configure.log
+          ./cruelbuild :build 2>&1 | tee ../build.log
+          mkdir -p ../artifact
+          cp arch/arm64/boot/Image-G973N config.G973N config.json ../artifact/
+          cp usr/magisk/backup_magisk ../artifact/magisk-config.txt
+          cp ../configure.log ../build.log ../artifact/
+          git diff --stat > ../artifact/source-change-summary.txt
+          git diff > ../artifact/source-changes.patch
+          cd ../artifact
+          sha256sum * > SHA256SUMS
+      - name: Upload candidate and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: G973N-kernel-candidate-NOT-FLASHABLE
+          path: artifact/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: G973N-build-logs
+          path: |
+            configure.log
+            build.log
+          if-no-files-found: ignore
+          retention-days: 14
